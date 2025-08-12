@@ -69,6 +69,9 @@
 
     [data-reveal]{opacity:0; transform:translateY(16px); transition:opacity .6s ease, transform .6s ease}
     .revealed{opacity:1 !important; transform:none !important}
+
+    /* Optional Debug-Overlay */
+    #dbg{position:fixed; right:8px; bottom:8px; background:rgba(0,0,0,.5); color:#cfe7ff; font:12px/1.4 monospace; padding:8px 10px; border:1px solid #2b4769; border-radius:8px; display:none; z-index:9999}
   </style>
 </head>
 <body>
@@ -198,6 +201,8 @@
     </div>
   </footer>
 
+  <div id="dbg"></div>
+
 <script>
 // ======================= PURE WEBGL (ohne Libraries) =======================
 (function(){
@@ -206,6 +211,9 @@
   const heroGlow = document.getElementById('heroGlow');
   const gl = canvas.getContext('webgl', {antialias:true, alpha:false});
   if(!gl){ document.body.classList.add('no-webgl'); fallback.style.display='grid'; return; }
+
+  // --- globals that must exist BEFORE resize() is called
+  let dpr = 1; // FIX: ensure dpr is defined before first use
 
   // --- utils
   function createShader(type, src){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(s)); } return s; }
@@ -247,7 +255,7 @@
   function buf(type, data, usage){ const b = gl.createBuffer(); gl.bindBuffer(type, b); gl.bufferData(type, data, usage||gl.STATIC_DRAW); return b; }
   const planeVBO = buf(gl.ARRAY_BUFFER, new Float32Array(verts));
   const planeUVBO = buf(gl.ARRAY_BUFFER, new Float32Array(uvs));
-  // Hinweis: Wir nutzen 16-bit Indizes; mit segBase ≤ 96 bleiben wir sicher < 65535
+  // 16‑bit Indizes; mit segBase ≤ 96 sicher < 65.535
   const planeEBO = buf(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx));
 
   // ----- Particles -----
@@ -257,7 +265,7 @@
       vec3 p = aPos; // einfache Rotation um Y und X
       p = vec3(cy*p.x+sy*p.z, p.y, -sy*p.x+cy*p.z);
       p = vec3(p.x, cx*p.y - sx*p.z, sx*p.y + cx*p.z);
-      gl_Position = uPV * vec4(p,1.0); gl_PointSize = uPtSize; }`; 
+      gl_Position = uPV * vec4(p,1.0); gl_PointSize = uPtSize; }`;
   const ptsFS = `precision mediump float; void main(){ vec2 d = gl_PointCoord - vec2(0.5); float m = dot(d,d); if(m>0.25) discard; gl_FragColor = vec4(0.48,0.66,1.0,0.55); }`;
   const ptsProgram = createProgram(createShader(gl.VERTEX_SHADER, ptsVS), createShader(gl.FRAGMENT_SHADER, ptsFS));
   const ptLoc = {pos:gl.getAttribLocation(ptsProgram,'aPos'), uPV:gl.getUniformLocation(ptsProgram,'uPV'), uTime:gl.getUniformLocation(ptsProgram,'uTime'), uRotY:gl.getUniformLocation(ptsProgram,'uRotY'), uRotX:gl.getUniformLocation(ptsProgram,'uRotX'), uPtSize:gl.getUniformLocation(ptsProgram,'uPtSize')};
@@ -269,7 +277,8 @@
   const proj = mat4(); const view = mat4(); const pv = mat4(); const model = mat4(); mat4Identity(model);
   function resize(){
     const hdr = document.querySelector('.hero'); const r = hdr.getBoundingClientRect();
-    dpr = Math.min(devicePixelRatio||1, 1.75); canvas.width=r.width*dpr; canvas.height=r.height*dpr; canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px';
+    dpr = Math.min(devicePixelRatio||1, 1.75); // uses predeclared dpr
+    canvas.width=r.width*dpr; canvas.height=r.height*dpr; canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px';
     gl.viewport(0,0,canvas.width,canvas.height);
     mat4Perspective(proj, Math.PI/3.2, canvas.width/canvas.height, 0.1, 100.0);
   }
@@ -287,7 +296,7 @@
 
   // --- render
   gl.enable(gl.DEPTH_TEST); gl.clearColor(0.043,0.051,0.071,1);
-  let camX=0, camY=0.6, camZ=3.5; let t=0; let dpr=1;
+  let camX=0, camY=0.6, camZ=3.5; let t=0;
 
   function drawPlane(){
     gl.useProgram(planeProgram);
@@ -333,6 +342,16 @@
     requestAnimationFrame(animate);
   }
   animate();
+
+  // --- minimal diagnostics (open with #debug)
+  const dbg = document.getElementById('dbg');
+  if(location.hash.includes('debug')){
+    dbg.style.display='block';
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const ren = info? gl.getParameter(info.UNMASKED_RENDERER_WEBGL): 'n/a';
+    const ven = info? gl.getParameter(info.UNMASKED_VENDOR_WEBGL): 'n/a';
+    setInterval(()=>{ dbg.textContent = `dpr:${dpr.toFixed(2)}\nsize:${canvas.width}x${canvas.height}\nrenderer:${ren}\nvendor:${ven}`; }, 300);
+  }
 })();
 
 // ======================= Scroll Reveal (ohne GSAP) =======================
