@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ReplyPilot – Review Replies lokal • 3D</title>
-  <meta name="description" content="Komplett lokale, ein‑Datei 3D‑Landingpage ohne CDNs: Berg/Glacier‑Analogien, Sterne‑Krone, Guardrail‑Shield, Parallax, Scroll‑Reveal.">
+  <meta name="description" content="Komplett lokale, ein‑Datei 3D‑Landingpage ohne CDNs: Berg/Glacier‑Analogien, Sterne‑Krone, Guardrail‑Shield, Aufstiegs‑Route, Parallax, Scroll‑Reveal.">
   <style>
     :root{
       --bg:#0b0d12; --bg-2:#0f1320; --txt:#e8ecf1; --muted:#aab3c2;
@@ -235,74 +235,119 @@
   // ===== Mountain (Vertex) + Ice/Rock (Fragment) =====
   const planeVS = `
     precision mediump float; attribute vec3 aPos; attribute vec2 aUv;
-    varying vec2 vUv; varying float vH; varying vec3 vWorld;
+    varying vec2 vUv; varying float vH; varying vec3 vWorld; varying vec3 vN; varying vec2 vXY;
     uniform float uTime; uniform float uAmp; uniform float uFreq; uniform mat4 uPV; uniform mat4 uModel;
 
-    // value-noise + fbm
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453123); }
-    float noise(in vec2 p){
-      vec2 i=floor(p); vec2 f=fract(p);
-      float a=hash(i);
-      float b=hash(i+vec2(1.0,0.0));
-      float c=hash(i+vec2(0.0,1.0));
-      float d=hash(i+vec2(1.0,1.0));
-      vec2 u=f*f*(3.0-2.0*f);
-      return mix(a,b,u.x) + (c-a)*u.y*(1.0-u.x) + (d-b)*u.x*u.y;
-    }
-    float fbm(vec2 p){
-      float v=0.0; float a=0.5; mat2 m=mat2(1.6,1.2,-1.2,1.6);
-      for(int i=0;i<5;i++){ v+=a*noise(p); p=m*p; a*=0.5; }
-      return v;
+    float noise(in vec2 p){ vec2 i=floor(p); vec2 f=fract(p); float a=hash(i); float b=hash(i+vec2(1.0,0.0)); float c=hash(i+vec2(0.0,1.0)); float d=hash(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f); return mix(a,b,u.x) + (c-a)*u.y*(1.0-u.x) + (d-b)*u.x*u.y; }
+    float fbm(vec2 p){ float v=0.0; float a=0.5; mat2 m=mat2(1.6,1.2,-1.2,1.6); for(int i=0;i<6;i++){ v+=a*noise(p); p=m*p; a*=0.5; } return v; }
+    float ridged(vec2 p){ float v=0.0; float a=0.5; mat2 m=mat2(1.7,1.1,-1.1,1.7); for(int i=0;i<5;i++){ float n=1.0-abs(2.0*noise(p)-1.0); v+=n*a; p=m*p; a*=0.5; } return v; }
+
+    float terrace(float x, float steps, float sharp){ float s=x*steps; float f=floor(s); float frac=s-f; float t=pow(frac, sharp); return (f+t)/steps; }
+
+    float heightAt(vec2 xy, float t){
+      // domain warp for realistic foldings
+      vec2 q = xy*1.0; vec2 warp = vec2(fbm(q*1.8), fbm(q*1.8+vec2(2.3,1.7))) - 0.5; xy += warp*0.35;
+      float r = length(xy*vec2(0.8,1.0));
+      float base = max(0.0, 1.0 - r);
+      float n1 = fbm(xy*0.9 + vec2(0.0, t*0.18));
+      float n2 = ridged(xy*1.25 + vec2(0.2, -t*0.15));
+      float h = (base*1.25 + (0.55*n1 + 0.60*n2)*base);
+      // subtle terracing near top
+      h = mix(h, terrace(h, 6.0, 1.6), 0.35);
+      return h * uAmp;
     }
 
     void main(){
-      vUv = aUv; vec3 p = aPos; float t=uTime*0.25;
-      // radial base (cone) + fbm details → mountain
-      float r = length(p.xy*vec2(0.8,1.0)); // slightly oval
-      float base = max(0.0, 1.0 - r);
-      float n = fbm(p.xy*0.8 + vec2(0.0, t*0.25)); // subtle time drift
-      float h = (base*1.15 + n*0.55*base) * uAmp; // height
-      p.z += h; vH = h;
+      vUv = aUv; vXY = aPos.xy; vec3 p = aPos; float t=uTime*0.25;
+      float h = heightAt(p.xy, t);
+      p.z += h; vH = h / uAmp; // normalized for masks
+
+      float eps = 0.012;
+      float hx = heightAt(p.xy + vec2(eps,0.0), t);
+      float hy = heightAt(p.xy + vec2(0.0,eps), t);
+      vec3 dx = vec3(eps, 0.0, hx - h);
+      vec3 dy = vec3(0.0, eps, hy - h);
+      vec3 N = normalize(cross(dx, dy));
+
       vec4 world = uModel * vec4(p,1.0);
       vWorld = world.xyz;
+      vN = normalize(mat3(uModel) * N);
       gl_Position = uPV * world;
     }`;
 
   const planeFS = `
-    #extension GL_OES_standard_derivatives : enable
-    precision mediump float; varying vec2 vUv; varying float vH; varying vec3 vWorld;
-    uniform vec3 uC1; uniform vec3 uC2; uniform float uTime; uniform float uFog; uniform vec3 uCam;
+    precision mediump float; varying vec2 vUv; varying float vH; varying vec3 vWorld; varying vec3 vN; varying vec2 vXY;
+    uniform vec3 uC1; uniform vec3 uC2; uniform float uTime; uniform float uFog; uniform vec3 uCam; uniform vec3 uLight; uniform float uAmp;
 
-    vec3 fogColor = vec3(0.06, 0.08, 0.12);
+    // duplicate noise stack for soft shadow sampling
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453123); }
+    float noise(in vec2 p){ vec2 i=floor(p); vec2 f=fract(p); float a=hash(i); float b=hash(i+vec2(1.0,0.0)); float c=hash(i+vec2(0.0,1.0)); float d=hash(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f); return mix(a,b,u.x) + (c-a)*u.y*(1.0-u.x) + (d-b)*u.x*u.y; }
+    float fbm(vec2 p){ float v=0.0; float a=0.5; mat2 m=mat2(1.6,1.2,-1.2,1.6); for(int i=0;i<6;i++){ v+=a*noise(p); p=m*p; a*=0.5; } return v; }
+    float ridged(vec2 p){ float v=0.0; float a=0.5; mat2 m=mat2(1.7,1.1,-1.1,1.7); for(int i=0;i<5;i++){ float n=1.0-abs(2.0*noise(p)-1.0); v+=n*a; p=m*p; a*=0.5; } return v; }
+    float terrace(float x, float steps, float sharp){ float s=x*steps; float f=floor(s); float frac=s-f; float t=pow(frac, sharp); return (f+t)/steps; }
+
+    float heightAt(vec2 xy, float t){
+      vec2 q = xy*1.0; vec2 warp = vec2(fbm(q*1.8), fbm(q*1.8+vec2(2.3,1.7))) - 0.5; xy += warp*0.35;
+      float r = length(xy*vec2(0.8,1.0));
+      float base = max(0.0, 1.0 - r);
+      float n1 = fbm(xy*0.9 + vec2(0.0, t*0.18));
+      float n2 = ridged(xy*1.25 + vec2(0.2, -t*0.15));
+      float h = (base*1.25 + (0.55*n1 + 0.60*n2)*base);
+      h = mix(h, terrace(h, 6.0, 1.6), 0.35);
+      return h * uAmp;
+    }
+
+    float softShadow(vec2 pos, float h, vec3 Lm, float t){
+      // project light to XY in model space
+      vec2 dir = normalize(Lm.xy + vec2(1e-5));
+      float step = 0.06; float res = 1.0; float k = 6.0;
+      for(int i=1;i<=6;i++){
+        float s = float(i)*step;
+        float sampleH = heightAt(pos + dir*s, t);
+        float expected = h + Lm.z*s; // climb along light direction
+        float diff = sampleH - expected; // if neighbor higher than expected → shadow
+        res = min(res, 1.0 - clamp(diff*k, 0.0, 1.0));
+      }
+      return clamp(res, 0.0, 1.0);
+    }
 
     void main(){
-      // fake normal from world-space derivatives
-      vec3 dx = dFdx(vWorld); vec3 dy = dFdy(vWorld);
-      vec3 N = normalize(cross(dx, dy));
-      vec3 L = normalize(vec3(0.6, 0.8, 0.2));
+      vec3 N = normalize(vN);
+      vec3 Lw = normalize(uLight);
       vec3 V = normalize(uCam - vWorld);
+      vec3 up = vec3(0.0,1.0,0.0);
 
-      // rock vs ice by height threshold
-      float ice = smoothstep(0.35, 0.75, vH); // high = ice
-      vec3 rockCol = mix(vec3(0.10,0.14,0.22), vec3(0.12,0.22,0.30), clamp(vH*1.2,0.0,1.0));
-      vec3 iceCol  = mix(uC1*0.6 + vec3(0.05,0.08,0.10), uC2*0.9, 0.5 + 0.5*ice);
+      // photometric terms
+      float diff = max(dot(N,Lw), 0.0);
 
-      // lighting
-      float diff = max(dot(N,L), 0.0);
-      // subtle specular for ice only
-      vec3 H = normalize(L+V);
-      float spec = pow(max(dot(N,H),0.0), 64.0) * ice * 0.9;
+      // snow/ice mask by height & slope
+      float heightMask = smoothstep(0.30, 0.75, vH);
+      float slopeMask  = smoothstep(0.35, 0.80, max(0.0, dot(N, up)));
+      float ice = clamp(0.55*heightMask + 0.45*slopeMask, 0.0, 1.0);
+
+      vec3 rockCol = mix(vec3(0.09,0.13,0.20), vec3(0.12,0.22,0.30), clamp(vH*1.2,0.0,1.0));
+      vec3 iceCol  = mix(uC1*0.60 + vec3(0.05,0.08,0.10), uC2*0.95, 0.65);
+
+      // cheap specular only on ice
+      vec3 H = normalize(Lw+V);
+      float spec = pow(max(dot(N,H),0.0), 120.0) * ice * 0.9;
+
+      // soft self shadow from heightfield
+      float h = vH*uAmp; // current absolute height
+      float shadow = softShadow(vXY, h, uLight, uTime*0.25);
 
       vec3 col = mix(rockCol, iceCol, ice);
-      col = col * (0.35 + 0.75*diff) + spec * vec3(0.85,1.0,0.95);
+      col = col * (0.28 + 0.78*diff*shadow) + spec * vec3(0.85,1.0,0.95);
 
-      // mint guardrail flash (subtle time pulse added in JS via uniform uFog/scene state)
-      // distance fog
+      // base fog (denser unten)
       float dist = length(uCam - vWorld);
-      float f = 1.0 - exp(-uFog * dist*0.55);
-      col = mix(col, fogColor, clamp(f,0.0,1.0));
+      float altitude = clamp(vH, 0.0, 1.0);
+      float baseFog = mix(1.35, 1.0, altitude); // mehr Nebel unten
+      float f = 1.0 - exp(-uFog * baseFog * dist*0.55);
+      col = mix(col, vec3(0.06,0.08,0.12), clamp(f,0.0,1.0));
 
-      gl_FragColor = vec4(col, 0.95);
+      gl_FragColor = vec4(col, 0.98);
     }`;
 
   const planeProgram = createProgram(createShader(gl.VERTEX_SHADER, planeVS), createShader(gl.FRAGMENT_SHADER, planeFS));
@@ -311,11 +356,12 @@
     uv:gl.getAttribLocation(planeProgram,'aUv'),
     uTime:gl.getUniformLocation(planeProgram,'uTime'), uAmp:gl.getUniformLocation(planeProgram,'uAmp'), uFreq:gl.getUniformLocation(planeProgram,'uFreq'),
     uPV:gl.getUniformLocation(planeProgram,'uPV'), uModel:gl.getUniformLocation(planeProgram,'uModel'),
-    uC1:gl.getUniformLocation(planeProgram,'uC1'), uC2:gl.getUniformLocation(planeProgram,'uC2'), uFog:gl.getUniformLocation(planeProgram,'uFog'), uCam:gl.getUniformLocation(planeProgram,'uCam')
+    uC1:gl.getUniformLocation(planeProgram,'uC1'), uC2:gl.getUniformLocation(planeProgram,'uC2'), uFog:gl.getUniformLocation(planeProgram,'uFog'), uCam:gl.getUniformLocation(planeProgram,'uCam'),
+    uLight:gl.getUniformLocation(planeProgram,'uLight')
   };
 
   // Geometry grid (non-indexed)
-  const segBase = (innerWidth<640)? 64:96; const w=6.0, h=3.5; const nx=segBase, ny=segBase;
+  const segBase = (innerWidth<640)? 120:144; const w=6.0, h=3.5; const nx=segBase, ny=segBase;
   const verts=[], uvs=[];
   for(let y=0;y<ny;y++){
     for(let x=0;x<nx;x++){
@@ -334,8 +380,8 @@
 
   // ===== Crown Points (5 Sterne) + optional Shield =====
   const ptsVS = `
-    precision mediump float; attribute vec3 aPos; uniform mat4 uPV; uniform float uSize; void main(){
-      gl_Position = uPV * vec4(aPos,1.0); gl_PointSize = uSize; }`;
+    precision mediump float; attribute vec3 aPos; uniform mat4 uPV; uniform mat4 uModel; uniform float uSize; varying float vIdx; void main(){
+      gl_Position = uPV * uModel * vec4(aPos,1.0); gl_PointSize = uSize; }`;
   const ptsFS = `
     precision mediump float; uniform vec3 uCol; uniform float uPulse; void main(){
       vec2 d = gl_PointCoord - vec2(0.5); float r = length(d);
@@ -343,61 +389,85 @@
       gl_FragColor = vec4(uCol, glow);
     }`;
   const ptsProgram = createProgram(createShader(gl.VERTEX_SHADER, ptsVS), createShader(gl.FRAGMENT_SHADER, ptsFS));
-  const ptLoc = { pos:gl.getAttribLocation(ptsProgram,'aPos'), uPV:gl.getUniformLocation(ptsProgram,'uPV'), uSize:gl.getUniformLocation(ptsProgram,'uSize'), uCol:gl.getUniformLocation(ptsProgram,'uCol'), uPulse:gl.getUniformLocation(ptsProgram,'uPulse') };
+  const ptLoc = { pos:gl.getAttribLocation(ptsProgram,'aPos'), uPV:gl.getUniformLocation(ptsProgram,'uPV'), uModel:gl.getUniformLocation(ptsProgram,'uModel'), uSize:gl.getUniformLocation(ptsProgram,'uSize'), uCol:gl.getUniformLocation(ptsProgram,'uCol'), uPulse:gl.getUniformLocation(ptsProgram,'uPulse') };
 
-  // crown positions (world space around peak)
-  const CROWN_N=6; // 5 stars + 1 optional shield pulse rendered as point as well
-  const cData = new Float32Array(CROWN_N*3);
+  const CROWN_N=6; const cData = new Float32Array(CROWN_N*3);
   function updateCrown(y){
-    const R = 0.35, Z = 0.0; // small ring above origin
-    for(let i=0;i<5;i++){
-      const a = (i/5)*6.28318 + 0.2; // rotate a bit
-      cData[i*3+0] = Math.cos(a)*R;
-      cData[i*3+1] = y;
-      cData[i*3+2] = Math.sin(a)*R + Z;
-    }
-    // shield point slightly below and in front
-    cData[15] = 0.75; cData[16] = y*0.65; cData[17] = 0.6;
+    const R = 0.35, Z = 0.0;
+    for(let i=0;i<5;i++){ const a = (i/5)*6.28318 + 0.2; cData[i*3+0] = Math.cos(a)*R; cData[i*3+1] = y; cData[i*3+2] = Math.sin(a)*R + Z; }
+    cData[15] = 0.75; cData[16] = y*0.65; cData[17] = 0.6; // shield point
   }
-  updateCrown(1.1);
+  updateCrown(1.15);
   const ptsVBO = buf(gl.ARRAY_BUFFER, cData);
+
+  // ===== Route (glühende Aufstiegs‑Punkte) =====
+  const routeVS = `
+    precision mediump float; attribute vec3 aPos; attribute float aIdx; varying float vIdx; uniform mat4 uPV; uniform mat4 uModel; uniform float uSize; void main(){ vIdx=aIdx; gl_Position = uPV * uModel * vec4(aPos,1.0); gl_PointSize = uSize; }`;
+  const routeFS = `
+    precision mediump float; varying float vIdx; uniform vec3 uCol; uniform float uTime; uniform float uGlow; void main(){ vec2 d=gl_PointCoord-vec2(0.5); float r=length(d); float core = smoothstep(0.48,0.0,r); float wave = 0.6 + 0.4*sin(uTime*2.0 - vIdx*8.0); float alpha = core * (0.35 + 0.65*uGlow*wave); gl_FragColor = vec4(uCol, alpha); }`;
+  const routeProgram = createProgram(createShader(gl.VERTEX_SHADER, routeVS), createShader(gl.FRAGMENT_SHADER, routeFS));
+  const rLoc = { pos:gl.getAttribLocation(routeProgram,'aPos'), idx:gl.getAttribLocation(routeProgram,'aIdx'), uPV:gl.getUniformLocation(routeProgram,'uPV'), uModel:gl.getUniformLocation(routeProgram,'uModel'), uSize:gl.getUniformLocation(routeProgram,'uSize'), uCol:gl.getUniformLocation(routeProgram,'uCol'), uTime:gl.getUniformLocation(routeProgram,'uTime'), uGlow:gl.getUniformLocation(routeProgram,'uGlow') };
+
+  const ROUTE_COUNT = 180; const routeData = new Float32Array(ROUTE_COUNT*3); const routeIdx = new Float32Array(ROUTE_COUNT);
+  for(let i=0;i<ROUTE_COUNT;i++){ routeIdx[i] = i/(ROUTE_COUNT-1); }
+  const routeVBO = buf(gl.ARRAY_BUFFER, routeData); const routeIBO = buf(gl.ARRAY_BUFFER, routeIdx);
 
   // --- matrices
   const proj = mat4(), view = mat4(), pv = mat4(), model = mat4(); mat4Identity(model);
-  // tilt plane
-  (function(){ const a=-Math.PI/2.2, c=Math.cos(a), s=Math.sin(a); model.set([1,0,0,0, 0,c,-s,0, 0,s,c,0, 0,0,0,1]); })();
+  // tilt plane (POSITIVE Winkel → Höhe zeigt nach oben, nicht kopfüber)
+  const tilt = Math.PI/2.25; (function(){ const a=tilt, c=Math.cos(a), s=Math.sin(a); model.set([1,0,0,0, 0,c,-s,0, 0,s,c,0, 0,0,0,1]); })();
 
-  const scene = { cam:[0,0.7,3.6], fog:0.22, crown:1.0, shield:0.0 };
-  let target = { cam:[...scene.cam], fog:scene.fog, crown:scene.crown, shield:scene.shield };
+  const scene = { cam:[0,0.8,3.6], fog:0.20, crown:1.0, shield:0.0, routeGlow:1.0 };
+  let target = JSON.parse(JSON.stringify(scene));
 
   function resize(){
     const hdr = document.querySelector('.hero'); const r = hdr.getBoundingClientRect();
     dpr = Math.min(devicePixelRatio||1, 1.75);
     canvas.width=r.width*dpr; canvas.height=r.height*dpr; canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px';
     gl.viewport(0,0,canvas.width,canvas.height);
-    mat4Perspective(proj, Math.PI/3.1, canvas.width/canvas.height, 0.1, 100.0);
+    mat4Perspective(proj, Math.PI/3.0, canvas.width/canvas.height, 0.1, 100.0);
   }
   window.addEventListener('resize', resize, {passive:true}); resize();
 
-  // pointer parallax (adds to camera target)
+  // --- CPU‑Noise (entspricht Shader) für Route‑Höhe
+  const H = (function(){
+    function fract(x){ return x-Math.floor(x); }
+    function hash(x,y){ return fract(Math.sin(x*127.1 + y*311.7)*43758.5453123); }
+    function noise(x,y){
+      const xi=Math.floor(x), yi=Math.floor(y); const xf=x-xi, yf=y-yi;
+      const a=hash(xi,yi), b=hash(xi+1,yi), c=hash(xi,yi+1), d=hash(xi+1,yi+1);
+      const ux=xf*xf*(3-2*xf), uy=yf*yf*(3-2*yf);
+      return (a*(1-ux)+b*ux) + (c-a)*uy*(1-ux) + (d-b)*ux*uy;
+    }
+    function fbm(x,y){ let v=0,a=0.5, m=[[1.6,1.2],[-1.2,1.6]]; for(let i=0;i<6;i++){ v+=a*noise(x,y); const nx=x*m[0][0]+y*m[0][1]; const ny=x*m[1][0]+y*m[1][1]; x=nx; y=ny; a*=0.5; } return v; }
+    function ridged(x,y){ let v=0,a=0.5, m=[[1.7,1.1],[-1.1,1.7]]; for(let i=0;i<5;i++){ const n=1-Math.abs(2*noise(x,y)-1); v+=n*a; const nx=x*m[0][0]+y*m[0][1]; const ny=x*m[1][0]+y*m[1][1]; x=nx; y=ny; a*=0.5; } return v; }
+    return function heightAt(x,y,t){ const r=Math.hypot(x*0.8, y*1.0); const base=Math.max(0,1-r); const n1=fbm(x*0.9, y*0.9 + t*0.20); const n2=ridged(x*1.2+0.2, y*1.2 - t*0.18); return (base*1.15 + (0.55*n1+0.45*n2)*base); };
+  })();
+
+  // pointer parallax
   let parX=0, parY=0; function onPointer(e){ const cx=(e.touches?e.touches[0].clientX:e.clientX)/innerWidth*2-1; const cy=(e.touches?e.touches[0].clientY:e.clientY)/innerHeight*2-1; parX=cx*0.5; parY=cy*0.2; heroGlow.style.setProperty('--x', (e.clientX||e.touches?.[0].clientX||0)+'px'); heroGlow.style.setProperty('--y', (e.clientY||e.touches?.[0].clientY||0)+'px'); }
   addEventListener('mousemove', onPointer, {passive:true}); addEventListener('touchmove', onPointer, {passive:true});
 
   gl.enable(gl.DEPTH_TEST); gl.clearColor(0.043,0.051,0.071,1);
-  let t=0; const baseCam=[...scene.cam];
+  let t=0;
+  // compute light in model space (rotate world light by -tilt around X)
+  const lightWorld=[0.6,0.8,0.2];
+  function rotX(v, ang){ const c=Math.cos(-ang), s=Math.sin(-ang); return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c]; }
+  const lightModel = rotX(lightWorld, tilt);
 
   function drawMountain(){
     gl.useProgram(planeProgram);
     gl.bindBuffer(gl.ARRAY_BUFFER, planeVBO); gl.enableVertexAttribArray(pLoc.pos); gl.vertexAttribPointer(pLoc.pos,3,gl.FLOAT,false,0,0);
     gl.bindBuffer(gl.ARRAY_BUFFER, planeUVBO); gl.enableVertexAttribArray(pLoc.uv); gl.vertexAttribPointer(pLoc.uv,2,gl.FLOAT,false,0,0);
     gl.uniform1f(pLoc.uTime, t);
-    gl.uniform1f(pLoc.uAmp, 1.15); // overall mountain height
+    gl.uniform1f(pLoc.uAmp, 1.35); // higher relief for realism
     gl.uniform1f(pLoc.uFreq, 1.6);
-    gl.uniform3f(pLoc.uC1, 0x8c/255, 0xf7/255, 0xe2/255); // mint
-    gl.uniform3f(pLoc.uC2, 0x7a/255, 0xa9/255, 0xff/255); // blue
+    gl.uniform3f(pLoc.uC1, 0x8c/255, 0xf7/255, 0xe2/255);
+    gl.uniform3f(pLoc.uC2, 0x7a/255, 0xa9/255, 0xff/255);
     gl.uniform1f(pLoc.uFog, scene.fog);
     gl.uniform3f(pLoc.uCam, scene.cam[0], scene.cam[1], scene.cam[2]);
-    // PV
+    // light direction in model space (compute in JS)
+    gl.uniform3f(pLoc.uLight, lightModel[0], lightModel[1], lightModel[2]);
     mat4LookAt(view, [scene.cam[0]+parX*0.6, scene.cam[1]+parY*0.3, scene.cam[2]], [0,0,0], [0,1,0]);
     mat4Mul(pv, proj, view);
     gl.uniformMatrix4fv(pLoc.uPV,false,pv);
@@ -409,35 +479,66 @@
     gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(ptsProgram);
     gl.bindBuffer(gl.ARRAY_BUFFER, ptsVBO); gl.enableVertexAttribArray(ptLoc.pos); gl.vertexAttribPointer(ptLoc.pos,3,gl.FLOAT,false,0,0);
-    // PV same as mountain
-    gl.uniformMatrix4fv(ptLoc.uPV,false,pv);
-    // pulse + sizes
+    gl.uniformMatrix4fv(ptLoc.uPV,false,pv); gl.uniformMatrix4fv(ptLoc.uModel,false,model);
     const pulse = 0.5 + 0.5*Math.sin(t*1.2);
     gl.uniform1f(ptLoc.uPulse, pulse);
     gl.uniform3f(ptLoc.uCol, 0.55, 0.95, 0.89);
     gl.uniform1f(ptLoc.uSize, (10.0 + 6.0*pulse) * dpr);
     gl.drawArrays(gl.POINTS, 0, 5);
-
-    // shield (6th point)
     const shieldPulse = scene.shield * (0.5 + 0.5*Math.sin(t*3.0));
     gl.uniform3f(ptLoc.uCol, 0.55, 0.95, 0.89);
     gl.uniform1f(ptLoc.uSize, (40.0 + 30.0*shieldPulse) * dpr);
     gl.uniform1f(ptLoc.uPulse, 0.8);
     gl.drawArrays(gl.POINTS, 5, 1);
+    gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
+  }
 
+  function updateRoute(){
+    // Spiral vom Rand zur Spitze; Y=Höhe + Offset
+    const turns = 4.8; const rStart = 2.0; const rEnd = 0.20; const yOff = 0.03;
+    for(let i=0;i<ROUTE_COUNT;i++){
+      const s = i/(ROUTE_COUNT-1);
+      const r = rStart*(1-s) + rEnd*s;
+      const ang = 0.6 + s*turns*6.28318;
+      const x = Math.cos(ang)*r; const y = Math.sin(ang)*r;
+      const h = H(x,y,t*0.25) * 1.25 + yOff; // gleiche Skalierung wie uAmp
+      // Position im Modell‑Space (vor uModel)
+      routeData[i*3+0] = x*1.0; // unsere Plane nutzt direkt x/y in selben Einheiten
+      routeData[i*3+1] = y* (3.5/6.0); // Angleichen an Seitenverhältnis w/h
+      routeData[i*3+2] = h;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, routeVBO); gl.bufferData(gl.ARRAY_BUFFER, routeData, gl.DYNAMIC_DRAW);
+  }
+
+  function drawRoute(){
+    gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(routeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, routeVBO); gl.enableVertexAttribArray(rLoc.pos); gl.vertexAttribPointer(rLoc.pos,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, routeIBO); gl.enableVertexAttribArray(rLoc.idx); gl.vertexAttribPointer(rLoc.idx,1,gl.FLOAT,false,0,0);
+    gl.uniformMatrix4fv(rLoc.uPV,false,pv); gl.uniformMatrix4fv(rLoc.uModel,false,model);
+    gl.uniform3f(rLoc.uCol, 0.55,0.95,0.89);
+    gl.uniform1f(rLoc.uSize, 6.5*dpr);
+    gl.uniform1f(rLoc.uTime, t);
+    gl.uniform1f(rLoc.uGlow, scene.routeGlow);
+    gl.drawArrays(gl.POINTS, 0, ROUTE_COUNT);
     gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
   }
 
   function animate(){
     t += 0.016;
-    // ease scene params toward target
     for(let i=0;i<3;i++){ scene.cam[i] += (target.cam[i]-scene.cam[i])*0.05; }
     scene.fog += (target.fog - scene.fog)*0.05;
     scene.crown += (target.crown - scene.crown)*0.08;
-    scene.shield += (target.shield - scene.shield)*0.08;
+    scene.shield += (target.shield - scene.shield)*0.10;
+    scene.routeGlow += (target.routeGlow - scene.routeGlow)*0.08;
+
+    mat4LookAt(view, [scene.cam[0]+parX*0.6, scene.cam[1]+parY*0.3, scene.cam[2]], [0,0,0], [0,1,0]);
+    mat4Mul(pv, proj, view);
 
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     drawMountain();
+    updateRoute();
+    drawRoute();
     drawCrown();
     requestAnimationFrame(animate);
   }
@@ -452,33 +553,27 @@
     const ven = info? gl.getParameter(info.UNMASKED_VENDOR_WEBGL): 'n/a';
     setInterval(()=>{ dbg.textContent = `dpr:${dpr.toFixed(2)}
 size:${canvas.width}x${canvas.height}
-crown:${scene.crown.toFixed(2)} fog:${scene.fog.toFixed(2)}
+fog:${scene.fog.toFixed(2)} route:${scene.routeGlow.toFixed(2)}
 renderer:${ren}
 vendor:${ven}`; }, 300);
   }
 
-  // --- scene states per section
+  // --- scene states per section (Kameraposen + Effekte)
   const states = {
-    top:      { cam:[0,0.7,3.6], fog:0.22, crown:1.0, shield:0.0 },
-    features: { cam:[0.6,0.9,3.2], fog:0.16, crown:1.0, shield:0.0 },
-    how:      { cam:[-0.5,1.0,3.0], fog:0.12, crown:1.05, shield:1.0 },
-    pricing:  { cam:[0,1.1,3.9], fog:0.08, crown:1.1, shield:0.0 }
+    top:      { cam:[0,0.85,3.7], fog:0.22, crown:1.0, shield:0.0, routeGlow:0.6 },
+    features: { cam:[0.65,0.95,3.25], fog:0.16, crown:1.0, shield:0.0, routeGlow:0.9 },
+    how:      { cam:[-0.55,1.05,3.05], fog:0.12, crown:1.05, shield:1.0, routeGlow:1.2 },
+    pricing:  { cam:[0,1.1,3.9], fog:0.08, crown:1.1, shield:0.0, routeGlow:0.5 }
   };
   function setState(id){ if(states[id]){ target = JSON.parse(JSON.stringify(states[id])); } }
 
-  // smooth anchor scroll remains; we also set scene state on click
+  // smooth anchor scroll + scene state
   const nav = document.querySelector('.nav');
   document.querySelectorAll('a[href^="#"]').forEach(a=>{
     a.addEventListener('click', function(e){
-      const id = this.getAttribute('href');
-      if(!id || id==='#') return;
-      const el = document.querySelector(id);
-      if(!el) return;
-      e.preventDefault();
-      const name = id.replace('#','');
-      setState(name);
-      const top = el.getBoundingClientRect().top + window.scrollY - (nav?.offsetHeight||72) - 8;
-      window.scrollTo({top, behavior:'smooth'});
+      const id = this.getAttribute('href'); if(!id || id==='#') return; const el = document.querySelector(id); if(!el) return;
+      e.preventDefault(); const name = id.replace('#',''); setState(name);
+      const top = el.getBoundingClientRect().top + window.scrollY - (nav?.offsetHeight||72) - 8; window.scrollTo({top, behavior:'smooth'});
     });
   });
 })();
