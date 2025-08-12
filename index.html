@@ -240,23 +240,25 @@
   const planeProgram = createProgram(createShader(gl.VERTEX_SHADER, planeVS), createShader(gl.FRAGMENT_SHADER, planeFS));
   const pLoc = {pos:gl.getAttribLocation(planeProgram,'aPos'), uv:gl.getAttribLocation(planeProgram,'aUv'), uTime:gl.getUniformLocation(planeProgram,'uTime'), uAmp:gl.getUniformLocation(planeProgram,'uAmp'), uFreq:gl.getUniformLocation(planeProgram,'uFreq'), uPV:gl.getUniformLocation(planeProgram,'uPV'), uModel:gl.getUniformLocation(planeProgram,'uModel'), uC1:gl.getUniformLocation(planeProgram,'uC1'), uC2:gl.getUniformLocation(planeProgram,'uC2')};
 
-  // Geometry grid
-  const segBase = (innerWidth<640)? 64:96; const w=6.0, h=3.5; const nx=segBase, ny=segBase; const verts=[], uvs=[], idx=[];
-  for(let y=0;y<=ny;y++){
-    for(let x=0;x<=nx;x++){
-      const px = (x/nx - 0.5)*w; const py = (y/ny - 0.5)*h; verts.push(px, py, 0); uvs.push(x/nx, y/ny);
-    }
-  }
+  // Geometry grid (NON‑INDEXED TRIANGLES → vermeidet EBO/Index-Probleme)
+  const segBase = (innerWidth<640)? 64:96; const w=6.0, h=3.5; const nx=segBase, ny=segBase; 
+  const verts=[], uvs=[];
   for(let y=0;y<ny;y++){
     for(let x=0;x<nx;x++){
-      const i = y*(nx+1)+x; idx.push(i, i+1, i+nx+1, i+1, i+nx+2, i+nx+1);
+      const x0 = x/nx - 0.5, x1 = (x+1)/nx - 0.5;
+      const y0 = y/ny - 0.5, y1 = (y+1)/ny - 0.5;
+      const p00=[x0*w, y0*h, 0], p10=[x1*w, y0*h, 0], p01=[x0*w, y1*h, 0], p11=[x1*w, y1*h, 0];
+      const t00=[x0+0.5, y0+0.5], t10=[x1+0.5, y0+0.5], t01=[x0+0.5, y1+0.5], t11=[x1+0.5, y1+0.5];
+      // tri 1: p00, p10, p11
+      verts.push(...p00, ...p10, ...p11); uvs.push(...t00, ...t10, ...t11);
+      // tri 2: p00, p11, p01
+      verts.push(...p00, ...p11, ...p01); uvs.push(...t00, ...t11, ...t01);
     }
   }
   function buf(type, data, usage){ const b = gl.createBuffer(); gl.bindBuffer(type, b); gl.bufferData(type, data, usage||gl.STATIC_DRAW); return b; }
   const planeVBO = buf(gl.ARRAY_BUFFER, new Float32Array(verts));
   const planeUVBO = buf(gl.ARRAY_BUFFER, new Float32Array(uvs));
-  // 16‑bit Indizes; mit segBase ≤ 96 sicher < 65.535
-  const planeEBO = buf(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx));
+  const planeCount = verts.length / 3;
 
   // ----- Particles -----
   const ptsVS = `
@@ -302,8 +304,7 @@
     gl.useProgram(planeProgram);
     gl.bindBuffer(gl.ARRAY_BUFFER, planeVBO); gl.enableVertexAttribArray(pLoc.pos); gl.vertexAttribPointer(pLoc.pos,3,gl.FLOAT,false,0,0);
     gl.bindBuffer(gl.ARRAY_BUFFER, planeUVBO); gl.enableVertexAttribArray(pLoc.uv); gl.vertexAttribPointer(pLoc.uv,2,gl.FLOAT,false,0,0);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, planeEBO);
-    gl.uniform1f(pLoc.uTime, t);
+        gl.uniform1f(pLoc.uTime, t);
     gl.uniform1f(pLoc.uAmp, 0.35);
     gl.uniform1f(pLoc.uFreq, 1.6);
     gl.uniform3f(pLoc.uC1, 0x17/255, 0x32/255, 0x4a/255);
@@ -314,7 +315,7 @@
     const a = -Math.PI/2.2; const c=Math.cos(a), s=Math.sin(a);
     tilt.set([1,0,0,0, 0,c,-s,0, 0,s,c,0, 0,0,0,1]);
     gl.uniformMatrix4fv(pLoc.uModel,false,tilt);
-    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, planeCount);
   }
 
   function drawParticles(){
