@@ -27,7 +27,7 @@
     .btn-primary{background:linear-gradient(120deg, var(--brand), var(--brand-2)); color:#0a0e16; border-color:transparent; font-weight:700}
     .btn-ghost{background:transparent}
 
-    .hero{position:relative; min-height:100svh; display:grid; place-items:center; padding-top:80px}
+    .hero{position:relative; min-height:100vh; display:grid; place-items:center; padding-top:80px}
     #stage{position:absolute; inset:0; display:block}
     .webgl-fallback{position:absolute; inset:0; display:none; place-items:center; color:#c6d0e0}
     .no-webgl .webgl-fallback{display:grid}
@@ -233,7 +233,7 @@
   const pLoc = {pos:gl.getAttribLocation(planeProgram,'aPos'), uv:gl.getAttribLocation(planeProgram,'aUv'), uTime:gl.getUniformLocation(planeProgram,'uTime'), uAmp:gl.getUniformLocation(planeProgram,'uAmp'), uFreq:gl.getUniformLocation(planeProgram,'uFreq'), uPV:gl.getUniformLocation(planeProgram,'uPV'), uModel:gl.getUniformLocation(planeProgram,'uModel'), uC1:gl.getUniformLocation(planeProgram,'uC1'), uC2:gl.getUniformLocation(planeProgram,'uC2')};
 
   // Geometry grid
-  const seg = (innerWidth<640)? 80:150; const w=6.0, h=3.5; const nx=seg, ny=seg; const verts=[], uvs=[], idx=[];
+  const segBase = (innerWidth<640)? 64:96; const w=6.0, h=3.5; const nx=segBase, ny=segBase; const verts=[], uvs=[], idx=[];
   for(let y=0;y<=ny;y++){
     for(let x=0;x<=nx;x++){
       const px = (x/nx - 0.5)*w; const py = (y/ny - 0.5)*h; verts.push(px, py, 0); uvs.push(x/nx, y/ny);
@@ -247,6 +247,7 @@
   function buf(type, data, usage){ const b = gl.createBuffer(); gl.bindBuffer(type, b); gl.bufferData(type, data, usage||gl.STATIC_DRAW); return b; }
   const planeVBO = buf(gl.ARRAY_BUFFER, new Float32Array(verts));
   const planeUVBO = buf(gl.ARRAY_BUFFER, new Float32Array(uvs));
+  // Hinweis: Wir nutzen 16-bit Indizes; mit segBase ≤ 96 bleiben wir sicher < 65535
   const planeEBO = buf(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx));
 
   // ----- Particles -----
