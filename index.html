@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
   <!-- Three.js & GSAP via CDN (einfach in GitHub Pages nutzbar) -->
-  <script defer src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
 
@@ -102,6 +102,30 @@
     .webgl-fallback{position:absolute; inset:0; display:none; place-items:center; color:#c6d0e0}
     .no-webgl .webgl-fallback{display:grid}
   </style>
+  
+  <!-- Fallback Loader, falls ein CDN blockiert ist -->
+  <script>
+    window.__loadScript = function(src, cb){
+      var s = document.createElement('script'); s.src = src; s.defer = true;
+      s.onload = function(){ cb && cb(); };
+      s.onerror = function(){ cb && cb(new Error('failed')); };
+      document.head.appendChild(s);
+    };
+    window.__ensureTHREE = function(next){
+      if (window.THREE) return next && next();
+      // Versuch #1 (jsDelivr ist bereits eingebunden). Warte kurz.
+      setTimeout(function(){
+        if (window.THREE) return next && next();
+        // Versuch #2: unpkg als Fallback
+        __loadScript('https://unpkg.com/three@0.160.0/build/three.min.js', function(err){
+          if (!err && window.THREE) return next && next();
+          document.body && document.body.classList.add('no-webgl');
+          console.warn('THREE konnte nicht geladen werden – Fallback ohne WebGL aktiv.');
+          next && next(new Error('no-three'));
+        });
+      }, 50);
+    };
+  </script>
 </head>
 <body>
   <!-- NAV -->
@@ -253,124 +277,132 @@
   <script>
   // ======= 3D STAGE (Three.js) =======
   ;(function(){
-    const canvas = document.getElementById('stage');
-    const fallbackHost = document.querySelector('.webgl-fallback');
-    const heroGlow = document.getElementById('heroGlow');
+    __ensureTHREE(function(err){
+      const canvas = document.getElementById('stage');
+      const fallbackHost = document.querySelector('.webgl-fallback');
+      const heroGlow = document.getElementById('heroGlow');
 
-    // Feature detect
-    const webglOk = (()=>{
-      try{ const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl')||c.getContext('experimental-webgl'))); }catch(e){return false}
-    })();
-    if(!webglOk){ document.body.classList.add('no-webgl'); return; }
-
-    // Scene basics
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
-    camera.position.set(0, 0.8, 3.5);
-
-    const renderer = new THREE.WebGLRenderer({canvas, antialias:true, powerPreference:'high-performance'});
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-    renderer.setClearColor(0x0b0d12, 1);
-
-    const sizes = {w:0, h:0};
-    function onResize(){
-      sizes.w = canvas.clientWidth;
-      sizes.h = canvas.clientHeight;
-      const rect = canvas.getBoundingClientRect();
-      renderer.setSize(rect.width, rect.height, false);
-      camera.aspect = rect.width/rect.height; camera.updateProjectionMatrix();
-    }
-    const ro = new ResizeObserver(onResize); ro.observe(canvas);
-
-    // Lights (subtil)
-    const light1 = new THREE.DirectionalLight(0x8cf7e2, 0.8); light1.position.set(2,2,2); scene.add(light1);
-    const light2 = new THREE.DirectionalLight(0x7aa9ff, 0.6); light2.position.set(-2,1,-1); scene.add(light2);
-    scene.add(new THREE.AmbientLight(0x506080, .35));
-
-    // Wavy plane shader (minimal, performant)
-    const vertex = `
-      varying vec2 vUv; varying float vH; uniform float uTime; uniform float uAmp; uniform float uFreq;
-      void main(){
-        vUv = uv;
-        vec3 p = position;
-        float t = uTime*0.5;
-        float wave1 = sin((p.x+ t)*uFreq) * cos((p.y*0.8 - t*0.8)*uFreq);
-        float wave2 = sin((p.y - t*1.2)*uFreq*0.7) * 0.6;
-        p.z += (wave1 + wave2) * uAmp;
-        vH = p.z;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      if(err){ // Kein WebGL/THREE → Canvas ausblenden, Seite bleibt nutzbar
+        if(canvas) canvas.style.display='none';
+        if(fallbackHost) fallbackHost.style.display='grid';
+        return;
       }
-    `;
-    const fragment = `
-      varying vec2 vUv; varying float vH; uniform vec3 uC1; uniform vec3 uC2; uniform float uTime;
-      void main(){
-        float g = smoothstep(-0.6, 0.8, vH);
-        vec3 col = mix(uC1, uC2, g) + vec3(0.02*sin(uTime*0.7 + vUv.x*6.283), 0.0, 0.0);
-        gl_FragColor = vec4(col, 0.8);
+
+      // Feature detect
+      const webglOk = (function(){
+        try{ const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl')||c.getContext('experimental-webgl'))); }catch(e){return false}
+      })();
+      if(!webglOk){ document.body.classList.add('no-webgl'); if(canvas) canvas.style.display='none'; if(fallbackHost) fallbackHost.style.display='grid'; return; }
+
+      // Scene basics
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+      camera.position.set(0, 0.8, 3.5);
+
+      const renderer = new THREE.WebGLRenderer({canvas, antialias:true, powerPreference:'high-performance'});
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+      renderer.setClearColor(0x0b0d12, 1);
+
+      const sizes = {w:0, h:0};
+      function onResize(){
+        sizes.w = canvas.clientWidth;
+        sizes.h = canvas.clientHeight;
+        const rect = canvas.getBoundingClientRect();
+        renderer.setSize(rect.width, rect.height, false);
+        camera.aspect = rect.width/rect.height; camera.updateProjectionMatrix();
       }
-    `;
+      const ro = new ResizeObserver(onResize); ro.observe(canvas);
 
-    const seg = window.innerWidth < 640 ? 80 : 150; // mobile freundlich
-    const geo = new THREE.PlaneGeometry(6.0, 3.5, seg, seg);
-    geo.rotateX(-Math.PI/2.2);
+      // Lights (subtil)
+      const light1 = new THREE.DirectionalLight(0x8cf7e2, 0.8); light1.position.set(2,2,2); scene.add(light1);
+      const light2 = new THREE.DirectionalLight(0x7aa9ff, 0.6); light2.position.set(-2,1,-1); scene.add(light2);
+      scene.add(new THREE.AmbientLight(0x506080, .35));
 
-    const mat = new THREE.ShaderMaterial({
-      transparent:true,
-      uniforms:{
-        uTime:{value:0}, uAmp:{value:0.35}, uFreq:{value:1.6},
-        uC1:{value:new THREE.Color('#17324a')}, uC2:{value:new THREE.Color('#2be7ff')}
-      }, vertexShader:vertex, fragmentShader:fragment
+      // Wavy plane shader (minimal, performant)
+      const vertex = `
+        varying vec2 vUv; varying float vH; uniform float uTime; uniform float uAmp; uniform float uFreq;
+        void main(){
+          vUv = uv;
+          vec3 p = position;
+          float t = uTime*0.5;
+          float wave1 = sin((p.x+ t)*uFreq) * cos((p.y*0.8 - t*0.8)*uFreq);
+          float wave2 = sin((p.y - t*1.2)*uFreq*0.7) * 0.6;
+          p.z += (wave1 + wave2) * uAmp;
+          vH = p.z;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `;
+      const fragment = `
+        varying vec2 vUv; varying float vH; uniform vec3 uC1; uniform vec3 uC2; uniform float uTime;
+        void main(){
+          float g = smoothstep(-0.6, 0.8, vH);
+          vec3 col = mix(uC1, uC2, g) + vec3(0.02*sin(uTime*0.7 + vUv.x*6.283), 0.0, 0.0);
+          gl_FragColor = vec4(col, 0.8);
+        }
+      `;
+
+      const seg = window.innerWidth < 640 ? 80 : 150; // mobile freundlich
+      const geo = new THREE.PlaneGeometry(6.0, 3.5, seg, seg);
+      geo.rotateX(-Math.PI/2.2);
+
+      const mat = new THREE.ShaderMaterial({
+        transparent:true,
+        uniforms:{
+          uTime:{value:0}, uAmp:{value:0.35}, uFreq:{value:1.6},
+          uC1:{value:new THREE.Color('#17324a')}, uC2:{value:new THREE.Color('#2be7ff')}
+        }, vertexShader:vertex, fragmentShader:fragment
+      });
+      const mesh = new THREE.Mesh(geo, mat); scene.add(mesh);
+
+      // Particles for depth
+      const pgeo = new THREE.BufferGeometry();
+      const COUNT = 1200;
+      const positions = new Float32Array(COUNT*3);
+      for(let i=0;i<COUNT;i++){
+        positions[i*3] = (Math.random()-0.5)*6.0;
+        positions[i*3+1] = Math.random()*2.2 + 0.1;
+        positions[i*3+2] = (Math.random()-0.5)*3.2;
+      }
+      pgeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+      const pmaterial = new THREE.PointsMaterial({color:0x7aa9ff, size:0.012, transparent:true, opacity:0.55});
+      const points = new THREE.Points(pgeo, pmaterial); scene.add(points);
+
+      // Camera parallax via mouse/touch
+      const target = {x:0, y:0};
+      function onPointer(e){
+        const x = (e.touches?e.touches[0].clientX:e.clientX)/window.innerWidth*2-1;
+        const y = (e.touches?e.touches[0].clientY:e.clientY)/window.innerHeight*2-1;
+        target.x = x*0.6; target.y = y*0.25;
+        heroGlow.style.setProperty('--x', (e.clientX||e.touches?.[0].clientX||0)+'px');
+        heroGlow.style.setProperty('--y', (e.clientY||e.touches?.[0].clientY||0)+'px');
+      }
+      window.addEventListener('mousemove', onPointer, {passive:true});
+      window.addEventListener('touchmove', onPointer, {passive:true});
+
+      // Animate
+      let t=0; const clock = new THREE.Clock();
+      function tick(){
+        t += clock.getDelta();
+        mat.uniforms.uTime.value = t;
+        camera.position.x += (target.x - camera.position.x)*0.04;
+        camera.position.y += (0.6 + target.y - camera.position.y)*0.04;
+        camera.lookAt(0,0,0);
+        points.rotation.y += 0.0008; points.rotation.x += 0.0003;
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+      }
+
+      // Size hero canvas to header
+      function fit(){
+        const hdr = document.querySelector('.hero');
+        const r = hdr.getBoundingClientRect();
+        canvas.width = r.width * Math.min(window.devicePixelRatio,1.75);
+        canvas.height = r.height * Math.min(window.devicePixelRatio,1.75);
+        renderer.setSize(r.width, r.height, false);
+        camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+      }
+      window.addEventListener('resize', fit); fit(); tick();
     });
-    const mesh = new THREE.Mesh(geo, mat); scene.add(mesh);
-
-    // Particles for depth
-    const pgeo = new THREE.BufferGeometry();
-    const COUNT = 1200;
-    const positions = new Float32Array(COUNT*3);
-    for(let i=0;i<COUNT;i++){
-      positions[i*3] = (Math.random()-0.5)*6.0;
-      positions[i*3+1] = Math.random()*2.2 + 0.1;
-      positions[i*3+2] = (Math.random()-0.5)*3.2;
-    }
-    pgeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
-    const pmaterial = new THREE.PointsMaterial({color:0x7aa9ff, size:0.012, transparent:true, opacity:0.55});
-    const points = new THREE.Points(pgeo, pmaterial); scene.add(points);
-
-    // Camera parallax via mouse/touch
-    const target = {x:0, y:0};
-    function onPointer(e){
-      const x = (e.touches?e.touches[0].clientX:e.clientX)/window.innerWidth*2-1;
-      const y = (e.touches?e.touches[0].clientY:e.clientY)/window.innerHeight*2-1;
-      target.x = x*0.6; target.y = y*0.25;
-      heroGlow.style.setProperty('--x', (e.clientX||e.touches?.[0].clientX||0)+'px');
-      heroGlow.style.setProperty('--y', (e.clientY||e.touches?.[0].clientY||0)+'px');
-    }
-    window.addEventListener('mousemove', onPointer, {passive:true});
-    window.addEventListener('touchmove', onPointer, {passive:true});
-
-    // Animate
-    let t=0; const clock = new THREE.Clock();
-    function tick(){
-      t += clock.getDelta();
-      mat.uniforms.uTime.value = t;
-      camera.position.x += (target.x - camera.position.x)*0.04;
-      camera.position.y += (0.6 + target.y - camera.position.y)*0.04;
-      camera.lookAt(0,0,0);
-      points.rotation.y += 0.0008; points.rotation.x += 0.0003;
-      renderer.render(scene, camera);
-      requestAnimationFrame(tick);
-    }
-
-    // Size hero canvas to header
-    function fit(){
-      const hdr = document.querySelector('.hero');
-      const r = hdr.getBoundingClientRect();
-      canvas.width = r.width * Math.min(window.devicePixelRatio,1.75);
-      canvas.height = r.height * Math.min(window.devicePixelRatio,1.75);
-      renderer.setSize(r.width, r.height, false);
-      camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
-    }
-    window.addEventListener('resize', fit); fit(); tick();
   })();
 
   // ======= Scroll‑Reveal & small UX polish =======
@@ -384,6 +416,6 @@
       });
     }
   })();
-  </script>
+</script>
 </body>
 </html>
